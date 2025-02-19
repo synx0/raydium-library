@@ -208,11 +208,12 @@ pub fn calculate_withdraw_info(
     })
 }
 
-pub fn calculate_swap_info(
+/// Updated for geyser states and no need for PDA account address just input token
+pub fn calculate_swap_info( 
     market_state: &MarketState,
     pool_id: Pubkey,
     amm_keys: &AmmKeys,
-    user_input_token: Pubkey,
+    input_token: Pubkey,
     amount_specified: u64,
     slippage_bps: u64,
     base_in: bool,
@@ -221,7 +222,6 @@ pub fn calculate_swap_info(
     let amm_account_data = market_state.get_account_data(&pool_id.to_string()).unwrap();
     let amm_pc_vault_data = market_state.get_account_data(&amm_keys.amm_pc_vault.to_string()).unwrap();
     let amm_coin_vault_data = market_state.get_account_data(&amm_keys.amm_coin_vault.to_string()).unwrap();
-    let user_input_token_data = market_state.get_account_data(&user_input_token.to_string()).unwrap();
 
     // Load AMM state
     let amm_state = raydium_amm::state::AmmInfo::load_from_bytes(&amm_account_data).unwrap();
@@ -230,7 +230,6 @@ pub fn calculate_swap_info(
     // Unpack token accounts
     let amm_pc_vault = common_utils::unpack_token(&amm_pc_vault_data).unwrap();
     let amm_coin_vault = common_utils::unpack_token(&amm_coin_vault_data).unwrap();
-    let user_input_token_info = common_utils::unpack_token(&user_input_token_data).unwrap();
 
     // Assert for AMM not sharing any liquidity to openbook
     assert_eq!(
@@ -249,13 +248,13 @@ pub fn calculate_swap_info(
 
     // Determine swap direction and input/output mints
     let (swap_direction, input_mint, output_mint) =
-        if user_input_token_info.base.mint == amm_keys.amm_coin_mint {
+        if input_token == amm_keys.amm_coin_mint {
             (
                 raydium_amm::math::SwapDirection::Coin2PC,
                 amm_keys.amm_coin_mint,
                 amm_keys.amm_pc_mint,
             )
-        } else if user_input_token_info.base.mint == amm_keys.amm_pc_mint {
+        } else if input_token == amm_keys.amm_pc_mint {
             (
                 raydium_amm::math::SwapDirection::PC2Coin,
                 amm_keys.amm_pc_mint,

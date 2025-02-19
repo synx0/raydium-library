@@ -9,6 +9,31 @@ use common::{common_utils, rpc};
 use raydium_amm::state::Loadable;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
+use yellowstone_grpc_proto::prelude::{SubscribeUpdateAccountInfo};
+
+use std::sync::Arc;
+use dashmap::DashMap;
+use tokio::sync::RwLock;
+
+/// ADDED STRUCTURES, EVENTUALLY ADD TO MAIN FILE STRUCTURE NOT FILE
+#[derive(Debug)]
+pub struct MarketState {
+    /// Track the latest slot globally.
+    pub latest_slot: RwLock<u64>, 
+    /// Mapping from an account's pubkey (as String) to its most recent state update.
+    pub account_updates: DashMap<String, Arc<SubscribeUpdateAccountInfo>>, // ✅ Store using Arc
+}
+
+impl MarketState {
+    /// Retrieves the `.data` attribute from `SubscribeUpdateAccountInfo` for a given account key.
+    pub fn get_account_data(&self, account_key: &str) -> Option<Vec<u8>> {
+        self.account_updates
+            .get(account_key) // Get a reference to the Arc<SubscribeUpdateAccountInfo>
+            .map(|update| update.data.clone()) // Clone the data field
+    }
+}
+
+
 
 pub fn calculate_deposit_info(
     rpc_client: &RpcClient,
@@ -184,45 +209,36 @@ pub fn calculate_withdraw_info(
 }
 
 pub fn calculate_swap_info(
-    rpc_client: &RpcClient,
-    amm_program: Pubkey,
+    market_state: &MarketState,
     pool_id: Pubkey,
+    amm_keys: &AmmKeys,
     user_input_token: Pubkey,
     amount_specified: u64,
     slippage_bps: u64,
     base_in: bool,
 ) -> Result<AmmSwapInfoResult> {
-    // load amm keys
-    let amm_keys = load_amm_keys(&rpc_client, &amm_program, &pool_id).unwrap();
-    // reload accounts data to calculate amm pool vault amount
-    // get multiple accounts at the same time to ensure data consistency
-    let load_pubkeys = vec![
-        pool_id,
-        amm_keys.amm_pc_vault,
-        amm_keys.amm_coin_vault,
-        user_input_token,
-    ];
-    let rsps = rpc::get_multiple_accounts(&rpc_client, &load_pubkeys).unwrap();
-    let accounts = array_ref![rsps, 0, 4];
-    let [amm_account, amm_pc_vault_account, amm_coin_vault_account, user_input_token_account] =
-        accounts;
+    // Retrieve account data from MarketState
+    let amm_account_data = market_state.get_account_data(&pool_id.to_string()).unwrap();
+    let amm_pc_vault_data = market_state.get_account_data(&amm_keys.amm_pc_vault.to_string()).unwrap();
+    let amm_coin_vault_data = market_state.get_account_data(&amm_keys.amm_coin_vault.to_string()).unwrap();
+    let user_input_token_data = market_state.get_account_data(&user_input_token.to_string()).unwrap();
 
-    let amm_state =
-        raydium_amm::state::AmmInfo::load_from_bytes(&amm_account.as_ref().unwrap().data).unwrap();
+    // Load AMM state
+    let amm_state = raydium_amm::state::AmmInfo::load_from_bytes(&amm_account_data).unwrap();
     let amm_state = amm_state.clone();
-    let amm_pc_vault =
-        common_utils::unpack_token(&amm_pc_vault_account.as_ref().unwrap().data).unwrap();
-    let amm_coin_vault =
-        common_utils::unpack_token(&amm_coin_vault_account.as_ref().unwrap().data).unwrap();
-    let user_input_token_info =
-        common_utils::unpack_token(&user_input_token_account.as_ref().unwrap().data).unwrap();
 
-    // assert for amm not share any liquidity to openbook
+    // Unpack token accounts
+    let amm_pc_vault = common_utils::unpack_token(&amm_pc_vault_data).unwrap();
+    let amm_coin_vault = common_utils::unpack_token(&amm_coin_vault_data).unwrap();
+    let user_input_token_info = common_utils::unpack_token(&user_input_token_data).unwrap();
+
+    // Assert for AMM not sharing any liquidity to openbook
     assert_eq!(
         raydium_amm::state::AmmStatus::from_u64(amm_state.status).orderbook_permission(),
         false
     );
-    // calculate pool vault amount without take pnl
+
+    // Calculate pool vault amount without taking PnL
     let (amm_pool_pc_vault_amount, amm_pool_coin_vault_amount) =
         raydium_amm::math::Calculator::calc_total_without_take_pnl_no_orderbook(
             amm_pc_vault.base.amount,
@@ -231,6 +247,7 @@ pub fn calculate_swap_info(
         )
         .unwrap();
 
+    // Determine swap direction and input/output mints
     let (swap_direction, input_mint, output_mint) =
         if user_input_token_info.base.mint == amm_keys.amm_coin_mint {
             (
@@ -247,6 +264,8 @@ pub fn calculate_swap_info(
         } else {
             panic!("input tokens not match pool vaults");
         };
+
+    // Calculate other amount threshold with slippage
     let other_amount_threshold = amm_math::swap_with_slippage(
         amm_pool_pc_vault_amount,
         amm_pool_coin_vault_amount,
@@ -278,6 +297,7 @@ pub fn calculate_swap_info(
         other_amount_threshold,
     })
 }
+
 
 // only use for initialize_amm_pool, because the keys of some amm pools are not used in this way.
 pub fn get_amm_pda_keys(

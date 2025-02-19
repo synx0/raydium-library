@@ -6,8 +6,6 @@ pub mod amm_math;
 pub use amm_math::*;
 pub mod amm_utils;
 pub use amm_utils::*;
-pub mod process_amm_commands;
-pub use process_amm_commands::*;
 pub mod amm_types;
 pub use amm_types::*;
 pub mod decode_amm_ix_event;

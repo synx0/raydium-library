@@ -32,6 +32,9 @@ clap = { version = "4.1.8", features = ["derive"] }
 toml = "0.8.19"
 hex = "0.4.3"
 bs58 = { version = "0.5.1" }
+yellowstone-grpc-proto = { git = "https://github.com/rpcpool/yellowstone-grpc.git", branch = "master", default-features = false }
+dashmap = "5.5.3"  
+tokio = { version = "1.37", features = ["sync", "rt-multi-thread"] }
 
 [lib]
 crate-type = ["cdylib", "lib"]
